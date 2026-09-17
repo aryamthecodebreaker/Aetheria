@@ -1,0 +1,11 @@
+export const CHUNK = 16;
+export const HEIGHT = 80;
+export const SEA = 27;
+export const VERSION = 1;
+export const BALANCE = { tick: 1 / 30, reach: 6, walk: 4.5, sprint: 6.8, jump: 8, gravity: 23, daySeconds: 900, autosave: 30, maxPlayers: 8, maxEntities: 64, cropSeconds: 90, smeltSeconds: 8, maxChunks: 384 };
+export const chunkCoord = (n: number) => Math.floor(n / CHUNK);
+export const localCoord = (n: number) => ((Math.floor(n) % CHUNK) + CHUNK) % CHUNK;
+export const index = (x: number, y: number, z: number) => x + z * CHUNK + y * CHUNK * CHUNK;
+export const chunkKey = (x: number, z: number) => `${x},${z}`;
+export const blockKey = (realm: string, x: number, y: number, z: number) => `${realm}:${x},${y},${z}`;
+export const distance = (a: {x:number;y:number;z:number}, b: {x:number;y:number;z:number}) => Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);

@@ -1,0 +1,1 @@
+{"compilerOptions":{"target":"ES2023","module":"ESNext","moduleResolution":"Bundler","lib":["ES2023","DOM","DOM.Iterable"],"types":["node","vite/client"],"strict":true,"skipLibCheck":true,"allowImportingTsExtensions":true,"noEmit":true,"verbatimModuleSyntax":true},"include":["client","server","shared","tests","tools","vite.config.ts"]}
