@@ -9,16 +9,18 @@ import { encodeRLE } from '../shared/codec';
 import { addItem, emptyInventory } from '../shared/inventory';
 import { stepMachines } from './machines';
 import type { Player } from '../shared/types';
-import { stepBody as sharedStepBody } from '../shared/physics';
+import { motionState, stepBody as sharedStepBody } from '../shared/physics';
 import { Storage, hashToken } from './storage';
 import { parseMessage } from './protocol';
-import { idleInput, inventory, send, type Session } from './session';
+import { idleInput, inventory, receiveInput, send, tickInput, type Session } from './session';
 import { Actions } from './actions';
 import { eid, mobDef, stepMob } from './entities';
 import { stepEncounters } from './encounters';
 import { stepSleep } from './sleep';
+import { isOriginAllowed, validateAllowedOrigins } from './origins';
 
-export async function createGameServer({ port = 7777, saveDir = resolve('saves'), stepBody = sharedStepBody }: { port?: number; saveDir?: string; stepBody?: typeof sharedStepBody } = {}) {
+export async function createGameServer({ port = 7777, saveDir = resolve('saves'), stepBody = sharedStepBody, allowedOrigins = [] }: { port?: number; saveDir?: string; stepBody?: typeof sharedStepBody; allowedOrigins?: string[] } = {}) {
+  const origins = validateAllowedOrigins(allowedOrigins);
   const storage = new Storage(saveDir);
   await storage.load();
   const sessions = new Set<Session>(), actions = new Actions(sessions, storage);
@@ -28,7 +30,7 @@ export async function createGameServer({ port = 7777, saveDir = resolve('saves')
     try {
       if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405).end(); return; }
       const path = decodeURIComponent(new URL(req.url ?? '/', 'http://localhost').pathname);
-      if (path === '/health') { res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"ok":true}'); return; }
+      if (path === '/health') { res.writeHead(200, { 'Content-Type': 'application/json' }).end(req.method === 'HEAD' ? undefined : '{"ok":true,"service":"aetheria","websocket":"/ws"}'); return; }
       let file = resolve(dist, '.' + path);
       if (file !== dist && !file.startsWith(dist + sep)) { res.writeHead(403).end(); return; }
       if (file === dist || (await stat(file).catch(() => null))?.isDirectory()) file = resolve(file, 'index.html');
@@ -39,10 +41,13 @@ export async function createGameServer({ port = 7777, saveDir = resolve('saves')
   });
   const wss = new WebSocketServer({ noServer: true, maxPayload: 16384, perMessageDeflate: false });
   http.on('upgrade', (req, socket, head) => {
-    const origin = req.headers.origin;
-    let allowed = true;
-    try { if (origin) allowed = new URL(origin).host === req.headers.host; } catch { allowed = false; }
-    if (req.url !== '/ws' || !allowed || sessions.size >= 64) { socket.destroy(); return; }
+    socket.on('error', () => socket.destroy());
+    const reject = (status: number, reason: string, message: string) => {
+      socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`);
+    };
+    if (req.url !== '/ws') { reject(404, 'Not Found', 'WebSocket endpoint not found'); return; }
+    if (!isOriginAllowed(req.headers.origin, req.headers.host, origins)) { reject(403, 'Forbidden', 'Origin not allowed'); return; }
+    if (sessions.size >= 64) { reject(503, 'Service Unavailable', 'Server at capacity'); return; }
     wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
   });
   wss.on('connection', socket => {
@@ -84,7 +89,7 @@ export async function createGameServer({ port = 7777, saveDir = resolve('saves')
           send(s, { type: 'welcome', player: s.player, world: g.meta, time: g.time, rules: g.rules }); return;
         }
         if (!s.player || !s.game) { send(s, { type: 'error', text: 'Join a world first' }); return; }
-        if (msg.type === 'input') { if (msg.input.seq > s.player.seq && msg.input.seq > s.input.seq) { s.input = { ...msg.input }; s.inputAt = now; } }
+        if (msg.type === 'input') { if (!receiveInput(s, msg.input, now)) socket.close(1008, 'Input queue full'); }
         else if (msg.type === 'chunks') {
           if (msg.realm !== s.player.realm || msg.coords.length > s.chunks) return;
           s.chunks -= msg.coords.length;
@@ -109,7 +114,7 @@ export async function createGameServer({ port = 7777, saveDir = resolve('saves')
       for (const s of online) {
         const p = s.player!;
         if (p.hp <= 0) continue;
-        const input = performance.now() - s.inputAt < 1000 ? s.input : { ...idleInput(), yaw: p.yaw, pitch: p.pitch, seq: p.seq };
+        const input = tickInput(s, performance.now());
         const result = stepBody(p, input, BALANCE.tick, { getBlock: (x,y,z) => g.world.get(p.realm,x,y,z), mode: p.mode === 'adventure' ? 'survival' : p.mode });
         if (result.fallDamage) actions.damage(s, result.fallDamage);
         p.yaw = input.yaw; p.pitch = input.pitch; p.seq = input.seq;
@@ -132,7 +137,7 @@ export async function createGameServer({ port = 7777, saveDir = resolve('saves')
       }
       for (const e of [...g.entities]) {
         if (!online.some(s => s.player!.realm === e.realm && distance(s.player!,e) < 128)) continue;
-        stepMob(e,g.world,online.map(s => s.player!),BALANCE.tick,Math.random,(p,n) => { const s = online.find(s => s.player === p); if (s && g.meta.difficulty > 0) actions.damage(s,n * (0.5 + g.meta.difficulty * 0.5)); });
+        stepMob(e,g.world,online.map(s => s.player!),BALANCE.tick,Math.random,(p,n) => { const s = online.find(s => s.player === p); if (s && g.meta.difficulty > 0) actions.damage(s,n * (0.5 + g.meta.difficulty * 0.5),'combat'); });
         if (e.kind === 'drop' && e.age > 1 && e.stack) for (const s of online) if (s.player!.hp > 0 && s.player!.mode !== 'spectator' && s.player!.realm === e.realm && distance(s.player!,e) < 1.8) { const left = addItem(s.player!.inventory,e.stack); if (left !== e.stack.count) inventory(s); e.stack.count = left; if (!left) break; }
         if (e.kind === 'drop' && (e.age > 300 || !e.stack?.count || e.y < -10)) g.entities.splice(g.entities.indexOf(e),1);
       }
@@ -147,7 +152,7 @@ export async function createGameServer({ port = 7777, saveDir = resolve('saves')
       if (tick % 30 === 0) for (const [key,m] of g.machines) if (m.slots.length) actions.syncContainer(g,key);
       if (tick % 3 === 0) for (const s of online) {
         const p = s.player!;
-        send(s,{ type:'snapshot',players:online.map(o => o.player!).filter(o => o.realm === p.realm && distance(o,p) <= 128).map(o => ({ ...o,inventory:[] })),entities:g.entities.filter(e => e.realm === p.realm && distance(e,p) <= 128),time:g.time,weather:g.weather,tick });
+        send(s,{ type:'snapshot',players:online.map(o => o.player!).filter(o => o.realm === p.realm && distance(o,p) <= 128).map(o => ({ ...o,inventory:[] })),entities:g.entities.filter(e => e.realm === p.realm && distance(e,p) <= 128),time:g.time,weather:g.weather,tick,motion:{state:motionState(p),input:s.activeInput ?? s.input,ticks:s.inputTicks ?? 0} });
       }
     }
   },1000/30);
@@ -163,9 +168,9 @@ export async function createGameServer({ port = 7777, saveDir = resolve('saves')
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  createGameServer({ port: Number(process.env.PORT ?? 7777),saveDir:process.env.SAVE_DIR ?? resolve('saves') }).then(server => {
+  createGameServer({ port: Number(process.env.PORT ?? 7777),saveDir:process.env.SAVE_DIR ?? resolve('saves'),allowedOrigins:process.env.ALLOWED_ORIGINS?.trim() ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()) : [] }).then(server => {
     console.log(`Aetheria listening on port ${server.port}`);
-    const shutdown = () => { void server.close().then(() => process.exit(0),e => { console.error(e); process.exit(1); }); };
+    const shutdown = () => { void server.close().then(() => process.exit(0),() => { console.error('Aetheria shutdown failed'); process.exit(1); }); };
     process.once('SIGINT',shutdown); process.once('SIGTERM',shutdown);
-  }).catch(e => { console.error(e); process.exitCode = 1; });
+  }).catch(() => { console.error('Aetheria startup failed. Check PORT, SAVE_DIR, and ALLOWED_ORIGINS configuration.'); process.exitCode = 1; });
 }

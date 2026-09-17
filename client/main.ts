@@ -6,6 +6,7 @@ const root = document.getElementById('ui');
 try {
   if (!(canvas instanceof HTMLCanvasElement) || !root) throw new Error('Game canvas or UI root is missing.');
   const game = new Game(canvas);
+  game.net.observeStatus((connected, text) => game.ui.connectionStatus(connected, text));
   if (import.meta.hot) import.meta.hot.dispose(() => game.dispose());
 } catch (error) {
   console.error('Unable to start Aetheria', error);
@@ -18,7 +19,9 @@ try {
     const title = document.createElement('h2');
     title.textContent = 'Unable to start the journey';
     const message = document.createElement('p');
-    message.textContent = 'Aetheria needs WebGL 2 and a modern desktop browser. Enable hardware acceleration, then reload.';
+    const detail = error instanceof Error ? error.message : String(error);
+    message.textContent = detail || 'An unknown startup error occurred. Reload to try again.';
+    if (/webgl|creating.*context/i.test(detail)) message.textContent += ' Aetheria needs WebGL 2. Check browser support and hardware acceleration, then reload.';
     const retry = document.createElement('button');
     retry.className = 'ae-primary';
     retry.textContent = 'Reload';

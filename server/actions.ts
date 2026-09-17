@@ -45,9 +45,26 @@ export class Actions {
     const max = itemDef(stack.id).durability;
     if (max) { stack.durability = (stack.durability ?? max) - 1; if (stack.durability <= 0) p.inventory[p.selected] = null; }
   }
-  damage(s: Session, n: number) {
+  damage(s: Session, n: number, source: 'environment' | 'combat' = 'environment') {
     const p = s.player!;
-    if (p.hp <= 0 || p.mode === 'creative' || p.mode === 'spectator') return;
+    if (p.hp <= 0 || p.mode === 'creative' || p.mode === 'spectator' || n <= 0) return;
+    if (source === 'combat') {
+      const equipped = new Map<string, { index: number; armor: number }>();
+      p.inventory.forEach((stack, index) => {
+        if (!stack || stack.count <= 0) return;
+        const def = itemDef(stack.id);
+        if (!def.slot || !def.armor || (stack.durability ?? def.durability ?? 0) <= 0) return;
+        if (def.armor > (equipped.get(def.slot)?.armor ?? 0)) equipped.set(def.slot, { index, armor: def.armor });
+      });
+      let armor = 0;
+      for (const piece of equipped.values()) {
+        armor += piece.armor;
+        const stack = p.inventory[piece.index]!;
+        stack.durability = (stack.durability ?? itemDef(stack.id).durability!) - 1;
+        if (stack.durability <= 0) p.inventory[piece.index] = null;
+      }
+      n *= 1 - Math.min(0.8, armor * 0.04);
+    }
     p.hp = Math.max(0, p.hp - n);
     s.sleeping = undefined;
     if (!p.hp) {
@@ -215,7 +232,7 @@ export class Actions {
             }
           }
         }
-      } else if (victim && g.rules.pvp) this.damage(victim, damage); else return;
+      } else if (victim && g.rules.pvp) this.damage(victim, damage, 'combat'); else return;
       this.wear(p); inventory(s);
     } else if (a.type === 'trade') {
       const npc = g.entities.find(e => e.id === a.npc && e.kind === 'trader' && e.realm === p.realm);

@@ -37,6 +37,19 @@ function fixture() {
   return {storage,g,p,s,messages,sessions,actions,set,act,power};
 }
 
+describe('container-adjacent placement', () => {
+  it.each([25,53])('places against block %i without opening it and consumes one carried block', id => {
+    const {g,p,s,set,act} = fixture();
+    set(2,70,0,id);
+    p.inventory[0] = {id:129,count:2};
+    act({type:'place',x:1,y:70,z:0});
+    expect(g.world.get('verdant',1,70,0)).toBe(29);
+    expect(g.world.get('verdant',2,70,0)).toBe(id);
+    expect(p.inventory[0]?.count).toBe(1);
+    expect(s.container).toBeUndefined();
+  });
+});
+
 describe('circuits and transfers', () => {
   it('toggles lever use, broadcasts edits and preserves registry collision and light states', () => {
     const {g,set,act,messages} = fixture();

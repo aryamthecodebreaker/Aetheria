@@ -1,132 +1,138 @@
 # Aetheria
 
-An original multiplayer voxel survival sandbox prototype built with Node.js 24, TypeScript, Vite, Three.js and `ws`. This is a playable foundation under active development, **not a complete “ultimate” game**. Implementation status below is based on source inspection; it is not a manual playtest certification.
+**Explore. Build. Survive. Cross worlds.**
 
-## Run locally
+Make a home in the Verdant wilds, descend into Cinder caverns, and find your way to the floating islands of Aether. Aetheria is an original multiplayer voxel survival sandbox built with TypeScript, Three.js, and a persistent Node.js server.
 
-Use Node.js 24 and npm. From `C:\Users\aryam\Downloads\minecraft`:
+[Frontend preview](https://aetheria-aryam.vercel.app) · [Quick start](#quick-start) · [Development guide](docs/development.md) · [Worklog](docs/worklog.md)
 
-```powershell
+The public deployment is currently a **frontend preview**, not an online multiplayer game: no multiplayer backend is connected, and `/ws` returns 404 there. Run locally to play.
+
+![Aetheria title screen with “Leave the familiar behind” and Begin your journey](docs/images/title.png)
+
+## A world to make your own
+
+- **Explore three realms:** seeded biomes, coastlines, caves, ores, trees, settlements, and ruins in Verdant; underground Cinder terrain; floating Aether islands.
+- **Gather and build:** mine blocks, manage your pack, craft from recipes, smelt in a forge, and store supplies in chests.
+- **Survive together:** server-authoritative movement and actions, shared worlds, chat, hunger, health, carried armor, basic creatures, and death/respawn.
+- **Keep your journey:** world edits and player progress persist on the server; your browser remembers your explorer identity.
+
+This is an actively developed prototype. The core has automated coverage and a focused local browser smoke; the [roadmap](#status-and-roadmap) distinguishes that from features still awaiting full playtesting.
+
+## Screenshots
+
+Actual captures from a local browser gameplay session, not mockups or the public deployment. The crafting check supplied two logs through a server-side test fixture, then crafted planks through the real UI; it does not demonstrate gathering those logs.
+
+### Verdant shoreline
+
+![First-person view of a snowy Tundra shoreline in Verdant, with ocean and hotbar](docs/images/verdant.png)
+
+### Your field pack
+
+![Field pack showing inventory, crafted planks, and recipes with ingredient requirements](docs/images/crafting.png)
+
+## Quick start
+
+Use **Node.js 24**, npm, and a desktop browser with WebGL2, keyboard, and mouse.
+
+```sh
+git clone https://github.com/aryamthecodebreaker/Aetheria.git
+cd Aetheria
 npm install
 npm run build
 npm run server
 ```
 
-Open http://localhost:7777. Keep the server terminal running. The server serves `dist/` and handles WebSockets at `/ws`; `/health` returns a basic liveness response. Rebuild after client changes. `npm run build` bundles the client, not a standalone server executable; the server runs TypeScript through `tsx`, so its development dependency must remain installed.
+Open **http://localhost:7777** and keep the server running. Choose **Begin your journey**, enter an explorer name, and create or join a world. Click the game to capture your mouse.
 
-### Development
+The Node process serves the built frontend and the `/ws` WebSocket endpoint. Rebuild after client changes. The server runs TypeScript through `tsx`, so do not omit development dependencies from this startup flow.
 
-Start `npm run server` in one terminal and `npm run dev` in another. Open http://localhost:5173. Vite proxies `/ws` to `ws://localhost:7777` (`vite.config.ts:5`). Use the page's default server address so the connection goes through the proxy. `npm run server:watch` is available for server development; restarts disconnect players.
+### Controls
 
-### Configuration
-
-Only these application environment variables are currently read (`server/main.ts:163`):
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `PORT` | `7777` | HTTP and WebSocket listening port |
-| `SAVE_DIR` | `saves` under the process working directory | World save directory; an absolute path avoids working-directory ambiguity |
-
-`.env.example` is a reference, **not an automatically loaded configuration file**. The current server script does not load `.env`. Set variables in the launching shell, for example:
-
-```powershell
-$env:PORT = "7777"
-$env:SAVE_DIR = "C:\Users\aryam\Downloads\minecraft\saves"
-npm run server
-```
-
-If you change `PORT`, the Vite proxy target must also be changed to match. There is no application `HOST`, auth-secret or external API-key setting.
-
-### Trusted LAN only
-
-Run the built client and server on your own host, then open `http://<host-LAN-IP>:7777` on another device. Substitute that host's actual local address; `localhost` on a second device refers to the second device. The server does not specify a bind host, so do not assume it is loopback-only. If necessary, allow inbound TCP 7777 only on the trusted/private network in Windows Firewall; do not disable the firewall or forward the router port.
-
-Load the client from the same host and port as the server. A server-address field is not a guarantee that arbitrary cross-origin connections are accepted. Browser secure-context requirements can also prevent profile creation with `crypto.randomUUID()` over plain HTTP at a LAN IP; use trusted HTTPS when needed rather than disabling browser security. LAN/browser behavior remains pending QA.
-
-**Do not expose this server publicly without TLS, real authentication/access control and further hardening.** There is no built-in HTTPS listener, account recovery, token revocation or private-world authorization.
-
-## Start playing
-
-Choose a display name/color, connect to the server, and create or select a world. World creation offers a seed, survival/creative/adventure/spectator mode, and difficulty. A blank seed is replaced by a generated value. After joining, click the world to capture the mouse.
-
-| Control | Action |
+| Input | Action |
 | --- | --- |
-| Mouse | Look around while captured |
-| W/A/S/D | Move |
-| Space | Jump / swim up; double-press toggles creative flight |
-| Ctrl | Sprint |
-| Shift | Crouch; descend while flying |
-| Hold left mouse | Mine; left-click an entity to attack |
-| Right mouse | Contextual use/trade, eat held food, or place a held block |
+| Mouse / W A S D | Look / move |
+| Space | Jump or swim up; double-press to toggle creative flight |
+| Ctrl / Shift | Sprint / crouch; Shift descends in flight |
+| Hold left mouse | Mine; click a creature to attack |
+| Right mouse | Use, trade, eat held food, or place a block, depending on context |
+| Shift + right mouse | Place a held block against a container without opening it |
 | 1–9 / mouse wheel | Select hotbar slot |
-| E | Inventory and recipe browser |
+| E | Open inventory and recipes |
 | T / Enter | Chat and commands |
 | Q | Drop the entire held stack |
-| F | Toggle HUD |
-| F3 | Debug statistics |
-| Esc | Release mouse / open or close the journal menu |
+| F / F3 | Toggle HUD / debug statistics |
+| Esc | Release mouse or open/close the journal menu |
 
-Controls: `client/input.ts:12`, `client/game.ts:444`, `shared/physics.ts:119`. Menus stop local input, not the multiplayer world simulation.
+In the pack, click source then destination; right-click to split a stack. Shift-click to deposit into an open container, and click its slots to withdraw. Recipes consume ingredients directly from the pack; some require a nearby visible workbench. This is recipe-based crafting, not a shaped crafting grid. Armor works automatically while carried. Menus stop your input, not the multiplayer simulation.
 
-In the pack, click a source then a destination; right-click to split a stack. Shift-click a pack slot to deposit into an open chest/forge; click a container slot to withdraw. Crafting selects a recipe and consumes ingredients from the pack, with a nearby visible workbench required for designated recipes. It is not a shaped crafting-grid interface. Use the in-game recipe list for current ingredients and progression, including portal recipes. Enhancement requires a nearby workbench, radiant and XP. Contextual right-click takes precedence over eating; the pack also has an “Eat held food” action (`client/ui.ts:363`).
+Enter `/help` in chat for commands. Other commands, including `/save`, `/mode`, `/give`, and `/rules`, require the world creator's profile.
 
-### Commands
+## Development
 
-Enter `/help` in chat. Other commands require the profile that created the world (`server/actions.ts:190`):
+Run these in separate terminals:
 
-```text
-/time day|night
-/weather clear|rain|storm
-/mode survival|creative|adventure|spectator
-/give item count
-/save
-/tp x y z
-/locate
-/rules key value
+```sh
+npm run server:watch
 ```
 
-`/mode` changes the caller's mode. `/give` resolves registry item names, with underscores for spaces; count must be 1–2304. `/tp` is limited to x/z within ±100000 and y from 1 up to, but not including, 80. `/locate` reports a nearby Verdant structure. Boolean rules are `pvp`, `keepInventory`, `daylight` and `mobSpawning`; `sleepPercent` accepts 0–100, but the existence of that setting alone does not establish a working bed system. PvP and keep-inventory default to false.
-
-## Current scope
-
-### Implemented source paths
-
-- Seeded Verdant terrain with biomes, caves, ores, trees, settlements and ruins; Cinder caverns and Aether floating islands. Portal actions switch realms and retain return positions (`shared/worldgen.ts:11`, `server/actions.ts:119`).
-- Streamed chunks, exposed-face worker meshing, procedural texture atlas, separate solid/liquid geometry, approximate vertex shading, day/night sky, weather visuals, particles and synthesized audio (`client/rendering/world.ts:118`, `client/rendering/mesher.ts:14`, `client/game.ts:20`).
-- Server-owned movement/collision and action validation, local movement prediction/correction, multiplayer snapshots, chat and reconnect-to-world-selection behavior (`server/main.ts:85`, `client/net.ts:58`).
-- Mining/placement, inventory transactions, recipe-based crafting, forge smelting, crop timers, chests, food/hunger/air/health, death/respawn, basic mobs, fixed trader offers and tool enhancement (`server/actions.ts:70`, `server/machines.ts:7`, `server/entities.ts:27`).
-- Local world/profile persistence and a rolling backup (`server/storage.ts:25`).
-
-These are implementation observations, not a claim that all interactions have passed end-to-end QA. Configured limits such as eight players per world are not measured capacity guarantees.
-
-### In progress or not implemented
-
-Beds, functional door states, visible crop stages, hopper transfer, circuits and bosses are being developed in parallel. At this documentation inspection, the server still returned an unavailable notice for sleep; machine stepping handled crops and forges, and the mob definitions did not include bosses. Treat these additions as **pending integration and QA**, not completed features. Recheck the source and worklog after the gameplay agent returns.
-
-The larger requested scope remains incomplete: vehicles, rail systems, villager professions and schedules, raids, alchemy, dynamic fluid simulation, true propagated voxel lighting, and shaped crafting are not implemented as complete systems. A registry item, a generated settlement, an equipment label or a rule setting does not imply its full gameplay system exists. AI is basic, not a general navigation/simulation system; this is not an infinite-height or production-scale world.
-
-## Identity and saves
-
-The browser keeps a random bearer token in `localStorage` under `aetheria.profile`; the server stores SHA-256 token hashes for profile lookup and creator privileges (`client/ui.ts:58`, `server/storage.ts:17`). This is local persistent identity, **not full authentication**. Possession of a token grants that profile's access; names are not credentials. Do not share tokens or browser-storage exports. Clearing site data loses the browser's profile identity; changing origin/port uses different local storage. Separate browser profiles can be used for separate players; a duplicate connected profile is rejected.
-
-Each world is saved as `<world-id>.json`, with `.json.bak` as the previous rolling copy. Saves include the seed, block-edit overlays, profiles, machines, entities, time, weather and rules. Generated chunks are rebuilt from the seed. Autosave runs every 30 seconds; `/save` and graceful server shutdown also save (`shared/constants.ts:5`, `server/main.ts:151`).
-
-Writes are serialized: write `.json.tmp`, sync and close it, copy the previous primary to `.bak`, then rename the temporary file over the primary. Startup tries the primary, then the backup; an unrecoverable world stops loading rather than silently generating a replacement. This is not a transactional database or a guarantee against power loss. Run only one server process per save directory. Stop it cleanly before taking an independent directory backup; keep backups outside this checkout. Custom save directories inside the project must be added to your local ignore rules. Never publish saves as assets.
-
-## Development checks
-
-```powershell
-npm run typecheck
-npm test
-npm run build
+```sh
+npm run dev
 ```
 
-`npm test` runs Vitest. Existing suites cover world generation/RLE, physics, inventory, server/storage and WebSocket integration, plus client/rendering logic. Test existence is not evidence of a passing run. No lint script is configured in `package.json`; do not substitute a made-up command. See [worklog](docs/worklog.md) for checks actually performed and pending manual QA.
+Open http://localhost:5173. Vite proxies `/ws` to the local backend on port 7777; leave the server address at its default. Server restarts disconnect players.
 
-## Layout and research
+| Script | Purpose |
+| --- | --- |
+| `npm run dev` | Vite development frontend |
+| `npm run server` | Persistent HTTP/WebSocket game server |
+| `npm run server:watch` | Restart server on source changes |
+| `npm run build` | Build frontend into `dist/` |
+| `npm run typecheck` | TypeScript checking without emitting files |
+| `npm run lint` | ESLint with zero warnings allowed |
+| `npm test` | Vitest unit and integration suites |
 
-- `shared/`: registries, recipes, types, seeded generation, physics and chunk codec.
-- `server/`: HTTP/WebSocket lifecycle, authoritative actions, entities, machines and file persistence.
-- `client/`: input, UI, networking, game presentation and worker renderer.
-- `tests/`: automated core and integration tests.
-- [Research and architectural tradeoffs](docs/research.md): successful primary documentation fetches, not Minecraft source material.
+See [development and QA](docs/development.md) for deployment, saves, reproduction commands, test evidence, and remaining gaps.
+
+## Configuration and hosting
+
+| Setting | Where / when | Default |
+| --- | --- | --- |
+| `VITE_SERVER_URL` | Frontend, at Vite build time | Page origin; root addresses become `/ws` |
+| `PORT` | Server process | `7777` |
+| `SAVE_DIR` | Server process | `./saves`, relative to the working directory |
+| `ALLOWED_ORIGINS` | Server process | Empty; same-host browser connections remain allowed |
+
+For a separately hosted frontend, set `VITE_SERVER_URL` to **your actual backend's HTTPS address or WSS endpoint**, then rebuild/redeploy the frontend. No public backend endpoint is currently provided. An HTTPS page requires WSS; an insecure local WebSocket address will not work from the preview.
+
+On that backend, set `ALLOWED_ORIGINS=https://aetheria-aryam.vercel.app` to allow the exact frontend origin. Multiple origins are comma-separated HTTP(S) origins without paths, trailing slashes, credentials, or wildcards. The server-address field also permits explicitly choosing a backend without rebuilding.
+
+The backend needs a **persistent Node host, WebSocket upgrade support, and persistent disk** for saves. Static hosting or serverless functions are not a substitute for this long-running game server. Terminate TLS at your host or reverse proxy; the application itself listens over HTTP. The server script does not automatically load `.env`; set its variables in the launching shell or host configuration. Vite handles its own frontend environment files.
+
+Browser identity is a local bearer token, not a full account system. Clearing site data loses that identity. Use trusted local/LAN hosting until authentication, access control, and deployment hardening meet your needs; an origin allowlist is not authentication.
+
+## Status and roadmap
+
+| Status | Scope |
+| --- | --- |
+| **Working core, automated coverage** | Seeded world generation, chunk streaming/meshing, inventory and crafting transactions, server-authoritative actions and movement, armor, saves/backup recovery, and WebSocket integration |
+| **Observed in local browser smoke** | World creation, two independent players joining, bidirectional chat, fixture-backed crafting, and reload/rejoin retaining identity and crafted inventory |
+| **Experimental; tests exist, full manual playthrough pending** | Boss encounters, beds/group sleep, circuits and doors, hopper transfers, crop growth/harvesting, and workbench repair |
+| **Not implemented as complete systems** | Player-fired projectiles, vehicles/rail simulation, dynamic fluid simulation, propagated voxel lighting, mobile/touch gameplay, shaped crafting, villager professions/schedules, raids, and alchemy |
+
+The latest recorded test run on **2026-09-17** passed **198 tests across 10 files**; this is a dated result, not a fixed total or a guarantee for later revisions. The local browser smoke passes end to end, including a real movement check, and reports only an expected Vite ws-proxy `ECONNRESET` during teardown. See the [worklog](docs/worklog.md) for check results, including any later runs.
+
+## Contributing
+
+Try a local world, report a reproducible issue, or improve one small system. Include the seed, realm, game mode, browser/Node versions, steps, and expected versus observed behavior. Never attach saves, bearer tokens, or browser-storage exports to public reports. Run typecheck, lint, tests, and build before submitting a change; document any manual checks separately.
+
+- `client/` — UI, input, networking, presentation, and worker rendering.
+- `server/` — authoritative simulation, actions, machines, and persistence.
+- `shared/` — types, registries, recipes, generation, physics, and codecs.
+- `tests/` — core and integration tests; client tests also live beside client code.
+- `tools/` — browser smoke and deployment inspection scripts.
+- [Research](docs/research.md) — technical references and architectural tradeoffs.
+
+## License
+
+`package.json` declares MIT. A standalone `LICENSE` file was not present at this documentation snapshot; adding the license text is pending with the repository maintainer.

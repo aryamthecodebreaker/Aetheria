@@ -1,13 +1,24 @@
 import { BLOCK, blockDef } from './blocks';
 import { BALANCE } from './constants';
-import type { Body, Input, Mode, Vec3 } from './types';
+import type { Body, Input, Mode, MotionState, Vec3 } from './types';
 
 export const PLAYER = { w: 0.6, h: 1.8, eye: 1.62 };
 
 type GetBlock = (x: number, y: number, z: number) => number;
 type Hit = { x: number; y: number; z: number; face: [number, number, number]; id: number; dist: number };
-type State = { height: number; coyote: number; held: boolean; tap: number; flying: boolean; peak: number };
-const states = new WeakMap<Body, State>();
+const states = new WeakMap<Body, MotionState>();
+export const motionState = (body: Body): MotionState => ({ ...(states.get(body) ?? { height: PLAYER.h, coyote: 0, held: false, tap: 1, flying: false, peak: body.y }) });
+export const restoreMotion = (body: Body, state: MotionState) => { states.set(body, { ...state }); };
+export const INPUT_QUEUE_LIMIT = 32;
+export function queueInput(queue: Input[], input: Input): boolean {
+  const last = queue.at(-1);
+  if (last && last.forward === input.forward && last.strafe === input.strafe && last.jump === input.jump && last.sprint === input.sprint && last.crouch === input.crouch && last.yaw === input.yaw && last.pitch === input.pitch) queue[queue.length - 1] = { ...input };
+  else {
+    if (queue.length >= INPUT_QUEUE_LIMIT) return false;
+    queue.push({ ...input });
+  }
+  return true;
+}
 const EPS = 1e-7;
 const LIMIT = 1e6;
 const finite = (n: number) => Number.isNaN(n) ? 0 : Math.max(-LIMIT, Math.min(LIMIT, n));

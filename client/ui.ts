@@ -1,6 +1,8 @@
 import type { Action, ClientMessage, Entity, Machine, Mode, Player, Stack, WorldMeta } from '../shared/types';
 import { BLOCKS, ITEMS, itemDef } from '../shared/blocks';
 import { RECIPES, SMELT, itemNameToId, type Recipe } from '../shared/recipes';
+import { loadProfile } from './profile';
+import { defaultServerAddress, socketAddress } from './net';
 import './style.css';
 
 type Settings = { sensitivity: number; fov: number; distance: number; volume: number; bob: boolean; invertY: boolean };
@@ -49,7 +51,9 @@ export class UI {
   private world?: WorldMeta;
   private worlds: WorldMeta[] = [];
   private listed = false;
-  private address = location.origin;
+  private address = defaultServerAddress();
+  private connectionError = '';
+  private profileNotice = '';
   private machine?: { key: string; value: Machine };
   private source: { slot: number; split: boolean } | null = null;
   private query = '';
@@ -61,10 +65,10 @@ export class UI {
   private rendered = new WeakMap<HTMLElement, string>();
 
   constructor(private send: (msg: ClientMessage) => void, private connect: (address: string) => void, private resume: () => void) {
-    const profile = readStored('aetheria.profile');
-    this.token = typeof profile.token === 'string' && /^[a-zA-Z0-9_-]{32,128}$/.test(profile.token) ? profile.token : crypto.randomUUID();
-    this.name = typeof profile.name === 'string' ? profile.name.trim().slice(0, 24) || 'Explorer' : 'Explorer';
-    this.color = typeof profile.color === 'string' && /^#[0-9a-f]{6}$/i.test(profile.color) ? profile.color : '#d79055';
+    const { profile, notice } = loadProfile();
+    this.token = profile.token;
+    this.name = profile.name;
+    this.color = profile.color;
     const saved = readStored('aetheria.settings');
     const number = (key: string, fallback: number, lo: number, hi: number) => typeof saved[key] === 'number' ? clamp(saved[key] as number, lo, hi) : fallback;
     this.settings = { sensitivity: number('sensitivity', 1, 0.2, 3), fov: number('fov', 75, 60, 100), distance: Math.round(number('distance', 4, 2, 6)), volume: number('volume', 0.65, 0, 1), bob: typeof saved.bob === 'boolean' ? saved.bob : true, invertY: typeof saved.invertY === 'boolean' ? saved.invertY : false };
@@ -85,8 +89,9 @@ export class UI {
     this.root.addEventListener('focusin', e => this.showTooltip(e.target as Element));
     this.root.addEventListener('pointerout', e => { if (!(e.relatedTarget instanceof Node) || !(e.target as Element).closest('[data-tip]')?.contains(e.relatedTarget)) this.hideTooltip(); });
     this.root.addEventListener('focusout', () => this.hideTooltip());
-    this.persist('aetheria.profile', { token: this.token, name: this.name, color: this.color });
+    this.profileNotice = notice ?? '';
     this.showTitle();
+    if (notice) this.notice(notice);
   }
 
   get selected() { return this.selection; }
@@ -102,9 +107,19 @@ export class UI {
     this.open('title');
   }
 
+  connectionStatus(connected: boolean, text: string): void {
+    this.connectionError = connected ? '' : text;
+    if (!connected) {
+      this.listed = false;
+      this.worlds = [];
+      this.open('worlds');
+    } else if (this.panel === 'worlds') this.renderWorlds();
+  }
+
   setWorlds(worlds: WorldMeta[]): void {
     this.worlds = worlds;
     this.listed = true;
+    this.connectionError = '';
     if (this.panel === 'worlds') this.renderWorlds();
   }
 
@@ -276,7 +291,7 @@ export class UI {
       return;
     }
     if (this.panel === 'worlds') {
-      this.layer.innerHTML = this.frame('Your next horizon', 'Choose a world, or make a place of your own.', `<div class="ae-world-layout"><div class="ae-world-main"><div class="ae-section-heading"><h3>Worlds</h3><button class="ae-text-button" data-action="refresh">Refresh</button></div><div class="ae-world-list" aria-live="polite"></div><button class="ae-primary ae-full" data-action="create" ${this.listed ? '' : 'disabled'}>Create a new world ${marks.arrow}</button></div><aside class="ae-profile"><h3>Your explorer</h3><label>Explorer name<input id="ae-name" name="name" maxlength="24" autocomplete="nickname" value="${esc(this.name)}"></label><label class="ae-color-label">Trail color<input id="ae-color" type="color" value="${esc(this.color)}"></label><p>Your identity stays in this browser. Keep its site data to return as the same explorer.</p><label>Server address<input id="ae-address" value="${esc(this.address)}" spellcheck="false" placeholder="${esc(location.origin)}"></label><button class="ae-secondary ae-full" data-action="connect">Connect to server</button><p>Remote servers must permit this page’s origin.</p></aside></div>`, true);
+      this.layer.innerHTML = this.frame('Your next horizon', 'Choose a world, or make a place of your own.', `<div class="ae-world-layout"><div class="ae-world-main"><div class="ae-section-heading"><h3>Worlds</h3><button class="ae-text-button" data-action="refresh">Refresh</button></div><div class="ae-world-list" aria-live="polite"></div><button class="ae-primary ae-full" data-action="create" ${this.listed ? '' : 'disabled'}>Create a new world ${marks.arrow}</button></div><aside class="ae-profile"><h3>Your explorer</h3><label>Explorer name<input id="ae-name" name="name" maxlength="24" autocomplete="nickname" value="${esc(this.name)}"></label><label class="ae-color-label">Trail color<input id="ae-color" type="color" value="${esc(this.color)}"></label><p>Your identity stays in this browser. Keep its site data to return as the same explorer.</p>${this.profileNotice ? `<p role="status">${esc(this.profileNotice)}</p>` : ''}<label>Server address<input id="ae-address" value="${esc(this.address)}" spellcheck="false" placeholder="${esc(location.origin)}"></label><button class="ae-secondary ae-full" data-action="connect">Connect to server</button><p>Static hosting, including Vercel, does not run the game server or /ws. Enter a running game server${location.protocol === 'https:' ? ' with HTTPS or WSS' : ''}, or set VITE_SERVER_URL when building. Remote servers must allow exactly ${esc(location.origin)}.</p></aside></div>`, true);
       this.renderWorlds();
       return;
     }
@@ -317,6 +332,10 @@ export class UI {
   private renderWorlds() {
     const create = this.root.querySelector<HTMLButtonElement>('[data-action="create"]');
     if (create) create.disabled = !this.listed;
+    if (this.connectionError) {
+      this.patch('.ae-world-list', `<div class="ae-empty"><h3>Disconnected</h3><p>${esc(this.connectionError)}</p><button class="ae-secondary" data-action="connect">Connect to server</button></div>`);
+      return;
+    }
     this.patch('.ae-world-list', !this.listed ? '<div class="ae-empty"><span class="ae-loading" aria-hidden="true"></span><h3>Looking for horizons…</h3><p>Connecting to the server. Use Connect to server to retry.</p></div>' : !this.worlds.length ? '<div class="ae-empty"><span class="ae-empty-mark">' + marks.compass + '</span><h3>No footprints yet.</h3><p>Create the first world on this server.</p></div>' : this.worlds.map((w, i) => `<button class="ae-world" data-world="${i}" data-focus="world-${i}"><span class="ae-world-symbol">${marks.compass}</span><span class="ae-world-description"><strong>${esc(w.name)}</strong><span>${esc(w.mode)} · ${['Peaceful', 'Easy', 'Normal', 'Hard'][w.difficulty] ?? 'Unknown'} · ${Math.floor(w.played / 60)} min explored</span><small>Seed ${esc(w.seed)}</small></span><span class="ae-world-join"><span>${w.players} online</span>${marks.arrow}</span></button>`).join(''));
   }
   private itemIcon(id: number) {
@@ -398,7 +417,7 @@ export class UI {
     const matches = RECIPES.map((recipe, index) => ({ recipe, index, ingredients: this.ingredients(recipe) })).filter(({ recipe, ingredients }) => [label(recipe.out), ...ingredients.map(([id]) => itemDef(id).name)].some(name => name.includes(query)));
     this.patch('.ae-recipe-list', matches.map(({ recipe, index, ingredients }) => {
       const can = ingredients.every(([id, n]) => this.count(id) >= n) && this.player?.mode !== 'spectator';
-      return `<article class="ae-recipe"><div class="ae-recipe-top">${this.itemIcon(itemNameToId(recipe.out))}<div><h4>${esc(label(recipe.out))} <span>×${recipe.count}</span></h4><small>${recipe.needs3 ? 'Nearby workbench required · server checked' : 'Hand crafting'}</small></div><button class="ae-craft-button" data-recipe="${index}" data-focus="recipe-${index}" ${can ? '' : 'disabled'} aria-label="Craft ${esc(label(recipe.out))}">Craft</button></div><ul class="ae-ingredients">${ingredients.map(([id, n]) => `<li class="${this.count(id) >= n ? 'is-enough' : 'is-missing'}">${esc(itemDef(id).name)} <span>${this.count(id)}/${n}</span></li>`).join('')}</ul></article>`;
+      return `<article class="ae-recipe"><div class="ae-recipe-top">${this.itemIcon(itemNameToId(recipe.out))}<div><h4>${esc(label(recipe.out))} <span>×${recipe.count}</span></h4><small>${recipe.needs3 ? 'Nearby workbench required · server checked' : 'Hand crafting'}</small></div><button class="ae-craft-button" data-recipe="${index}" data-focus="recipe-${index}" ${can ? '' : 'disabled'} aria-label="Craft ${esc(label(recipe.out))}">Craft</button></div><ul class="ae-ingredients">${ingredients.map(([id, n]) => `<li class="${this.count(id) >= n ? 'is-enough' : 'is-missing'}">${esc(itemDef(id).name)} <span>${this.count(id)}/${n}</span></li>`).join('')}</ul>${can ? '' : `<p class="ae-help">${this.player?.mode === 'spectator' ? 'Crafting is unavailable in spectator mode.' : 'Missing ingredients. Gather the amounts listed above to craft.'}</p>`}</article>`;
     }).join('') || '<div class="ae-empty"><h3>Nothing in these notes.</h3><p>Try an item name or an ingredient.</p></div>');
   }
   private renderTrades() {
@@ -431,17 +450,16 @@ export class UI {
   private connectServer() {
     this.profile();
     const input = this.root.querySelector<HTMLInputElement>('#ae-address');
-    this.address = input?.value.trim() || this.address || location.origin;
+    this.address = input ? input.value.trim() : this.address;
     try {
-      const url = new URL(this.address.includes('://') ? this.address : `${location.protocol}//${this.address}`);
-      if (!['http:', 'https:', 'ws:', 'wss:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid address');
-      url.protocol = url.protocol === 'https:' || url.protocol === 'wss:' ? 'wss:' : 'ws:';
-      if (url.pathname === '/') url.pathname = '/ws';
-      url.hash = '';
+      const address = socketAddress(this.address);
       this.listed = false;
+      this.connectionError = '';
       this.renderWorlds();
-      this.connect(url.toString());
-    } catch { this.notice('Enter a valid HTTP or WebSocket server address, then connect again.'); }
+      this.connect(address);
+    } catch (error) {
+      this.connectionStatus(false, error instanceof Error ? error.message : 'Invalid server address.');
+    }
   }
   private pickSlot(slot: number, split: boolean) {
     if (!this.player || this.player.mode === 'spectator') return;
@@ -476,7 +494,7 @@ export class UI {
       case 'refresh': this.connectServer(); break;
       case 'connect': this.connectServer(); break;
       case 'create': this.profile(); this.open('create'); break;
-      case 'back': this.player ? this.close() : this.open('title'); break;
+      case 'back': if (this.player) this.close(); else this.open('title'); break;
       case 'resume': this.close(); break;
       case 'guide': this.showGuide(); break;
       case 'guide-back': this.open(this.guideBack); break;
@@ -508,7 +526,7 @@ export class UI {
       this.patch('.ae-form-status', 'Creating your world… If the server reports an error, adjust the details and try again.');
     } else if (form.id === 'ae-chat') {
       const input = form.querySelector<HTMLInputElement>('input')!;
-      const text = input.value.replace(/[\x00-\x1f]/g, '').trim();
+      const text = [...input.value].filter(c => c.charCodeAt(0) >= 32).join('').trim();
       if (!text) return;
       this.action({ type: 'chat', text: text.slice(0, 256) });
       input.value = '';

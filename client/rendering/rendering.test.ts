@@ -8,10 +8,9 @@ import { meshChunk } from './mesher';
 import { makeActor, animateActor } from './actors';
 import { makeAtlas } from './atlas';
 import { WorldRenderer } from './world';
-import { Game, usesBlock } from '../game';
-import type { Action, ClientMessage, Player, Stack } from '../../shared/types';
-import { catalog, repairCost, UI } from '../ui';
-import { itemDef } from '../../shared/blocks';
+import { usesBlock } from '../game';
+import type { ClientMessage, Player, Stack } from '../../shared/types';
+import { repairCost, UI } from '../ui';
 
 const volume = () => new Uint16Array(CHUNK * CHUNK * HEIGHT);
 function mesh(blocks: [number, number, number, number][]) {

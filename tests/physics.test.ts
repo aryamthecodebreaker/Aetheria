@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BLOCK } from '../shared/blocks';
 import { BALANCE } from '../shared/constants';
-import { collide, LOS, PLAYER, raycastVoxel, stepBody } from '../shared/physics';
+import { collide, LOS, motionState, PLAYER, raycastVoxel, restoreMotion, stepBody } from '../shared/physics';
 import type { Body, Input } from '../shared/types';
 
 const idle: Input = { forward: 0, strafe: 0, jump: false, sprint: false, crouch: false, yaw: 0, pitch: 0, seq: 0 };
@@ -192,6 +192,26 @@ describe('body physics', () => {
     const body = bodyAt();
     for (let i = 0; i < 40; i++) stepBody(body, { ...idle, jump: true }, 0.05, { getBlock: ground, mode: 'creative' });
     expect(body.y).toBe(0);
+  });
+
+  it('restores independent post-tick motion state including held jump, flight and fall peak', () => {
+    for (const mode of ['survival','creative'] as const) {
+      const server = bodyAt(0.5,8);
+      for (const jump of [true,false,true,false]) stepBody(server,{...idle,jump},BALANCE.tick,{getBlock:ground,mode});
+      const saved = motionState(server), replay = {...server};
+      restoreMotion(replay,saved);
+      const baseline = {...saved};
+      let damage = 0;
+      for (let i = 0; i < 100; i++) {
+        const input = {...idle,forward:1};
+        const expected = stepBody(server,input,BALANCE.tick,{getBlock:ground,mode});
+        expect(stepBody(replay,input,BALANCE.tick,{getBlock:ground,mode})).toEqual(expected);
+        expect(replay).toEqual(server);
+        damage += expected.fallDamage ?? 0;
+      }
+      expect(saved).toEqual(baseline);
+      expect(damage).toBe(mode === 'survival' ? 5 : 0);
+    }
   });
 
   it('lets spectators pass through blocks at speed 13', () => {

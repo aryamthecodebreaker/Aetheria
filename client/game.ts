@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import { blockDef, itemDef } from '../shared/blocks';
 import { decodeRLE } from '../shared/codec';
 import { BALANCE, CHUNK, HEIGHT, chunkCoord, chunkKey, distance } from '../shared/constants';
-import { PLAYER, raycastVoxel, stepBody } from '../shared/physics';
-import type { Action, Body, ClientMessage, Entity, Input, Player, ServerMessage, Vec3 } from '../shared/types';
+import { PLAYER, queueInput, raycastVoxel, restoreMotion, stepBody } from '../shared/physics';
+import type { Action, Body, ClientMessage, Entity, Input, MotionAck, Player, ServerMessage, Vec3 } from '../shared/types';
 import { WorldGen } from '../shared/worldgen';
 import { Controls } from './input';
 import { Net } from './net';
@@ -16,10 +16,46 @@ type Sound = 'place' | 'break' | 'hurt' | 'craft';
 const vector = (p: Vec3) => new THREE.Vector3(p.x, p.y, p.z);
 const bodyOf = (p: Player): Body => ({ x: p.x, y: p.y, z: p.z, vy: p.vy, grounded: p.grounded });
 const angleDelta = (a: number, b: number) => Math.atan2(Math.sin(b - a), Math.cos(b - a));
-export function usesBlock(id: number, heldId?: number): boolean {
+export function usesBlock(id: number, heldId?: number, crouch = false): boolean {
+  if (crouch) return false;
   const block = blockDef(id), held = heldId === undefined ? undefined : itemDef(heldId);
   return !!block.container || !!block.crop || block.name === 'forge' || ['bed', 'lever', 'door', 'door open', 'aether portal', 'cinder portal'].includes(block.name)
     || [1, 2].includes(id) && held?.tool === 'hoe' || id === 31 && (heldId === 29 || heldId === 48);
+}
+
+export class Prediction {
+  private queue: Input[] = [];
+  private history: { input: Input; ticks: number }[] = [];
+  private active?: Input;
+  private ticks = 0;
+  private elapsed = 0;
+
+  enqueue(input: Input): void { queueInput(this.queue, input); }
+
+  advance(body: Body, dt: number, opts: Parameters<typeof stepBody>[3]): void {
+    this.elapsed += Math.min(0.05, dt);
+    while (this.elapsed + 1e-9 >= BALANCE.tick) {
+      this.elapsed = Math.max(0, this.elapsed - BALANCE.tick);
+      const input = this.queue.shift() ?? this.active;
+      if (!input) continue;
+      this.ticks = input.seq === this.active?.seq ? this.ticks + 1 : 1;
+      this.active = input;
+      stepBody(body, input, BALANCE.tick, opts);
+      this.history.push({ input, ticks: this.ticks });
+      if (this.history.length > 180) this.history.shift();
+    }
+  }
+
+  reconcile(body: Body, next: Body, ack: MotionAck, opts: Parameters<typeof stepBody>[3]): void {
+    this.history = this.history.filter(entry => entry.input.seq > ack.input.seq || entry.input.seq === ack.input.seq && entry.ticks > ack.ticks);
+    this.queue = this.queue.filter(input => input.seq > ack.input.seq);
+    Object.assign(body, next);
+    restoreMotion(body, ack.state);
+    for (const entry of this.history) stepBody(body, entry.input, BALANCE.tick, opts);
+    const last = this.history.at(-1);
+    this.active = last?.input ?? ack.input;
+    this.ticks = last?.ticks ?? ack.ticks;
+  }
 }
 
 class Audio {
@@ -157,7 +193,7 @@ export class Game {
   private ray = new THREE.Raycaster();
   private direction = new THREE.Vector3();
   private correction = new THREE.Vector3();
-  private history: { seq: number; body: Body }[] = [];
+  private prediction = new Prediction();
   private lastInput?: Input;
   private inputAt = 0;
   private mine?: { key: string; start: number; duration: number };
@@ -280,7 +316,7 @@ export class Game {
         this.time = message.time;
         this.weather = message.weather;
         const local = message.players.find(p => p.id === this.player!.id);
-        if (local) this.acceptPlayer(local, true);
+        if (local) this.acceptPlayer(local, true, message.motion);
         this.syncActors([...message.entities, ...message.players.filter(p => p.id !== this.player!.id)]);
         break;
       }
@@ -310,7 +346,7 @@ export class Game {
     }
   }
 
-  private acceptPlayer(next: Player, snapshot: boolean): void {
+  private acceptPlayer(next: Player, snapshot: boolean, motion?: MotionAck): void {
     const previous = this.player!;
     const realmChanged = next.realm !== previous.realm;
     const respawned = next.hp > 0 && previous.hp <= 0;
@@ -330,17 +366,14 @@ export class Game {
       this.requestChunks(performance.now());
     } else if (next.mode !== previous.mode) {
       this.body = bodyOf(next);
-      this.history = [];
+      this.prediction = new Prediction();
       this.correction.set(0, 0, 0);
       this.controls.clear();
-    } else if (snapshot && this.body) {
-      const historical = this.history.find(entry => entry.seq === next.seq);
-      const reference = historical?.body ?? this.body;
-      const error = vector(next).sub(vector(reference));
-      if (error.length() > 4) { Object.assign(this.body, bodyOf(next)); this.correction.set(0, 0, 0); }
-      else if (error.length() > 0.3) this.correction.copy(error);
-      if (Math.abs(next.vy - this.body.vy) > 8) this.body.vy = next.vy;
-      this.history = this.history.filter(entry => entry.seq >= next.seq);
+    } else if (snapshot && this.body && motion) {
+      const rendered = vector(this.body).add(this.correction);
+      this.prediction.reconcile(this.body, bodyOf(next), motion, { getBlock: this.getBlock, mode: next.mode === 'adventure' ? 'survival' : next.mode });
+      this.correction.copy(rendered.sub(vector(this.body)));
+      if (this.correction.length() > 4) this.correction.set(0, 0, 0);
     }
     if (next.hp <= 0) { this.mine = undefined; this.controls.clear(); }
   }
@@ -441,8 +474,7 @@ export class Game {
     input.seq = ++this.controls.seq;
     if (this.net.send({ type: 'input', input })) {
       this.lastInput = input; this.inputAt = now;
-      if (this.body) this.history.push({ seq: input.seq, body: { ...this.body } });
-      if (this.history.length > 180) this.history.shift();
+      this.prediction.enqueue(input);
     }
   }
 
@@ -496,7 +528,7 @@ export class Game {
       this.useAt = now;
       if (actor && 'kind' in actor.entity && actor.entity.kind === 'trader') { this.controls.clear(); this.ui.trade(actor.entity.id); return; }
       const stack = this.player.inventory[this.ui.selected], held = stack ? itemDef(stack.id) : undefined;
-      if (block && usesBlock(block.id, stack?.id)) {
+      if (block && usesBlock(block.id, stack?.id, this.controls.sample().crouch)) {
         this.action({ type: 'use', x: block.x, y: block.y, z: block.z });
         if ([42, 43].includes(block.id)) this.portalReady = false;
         return;
@@ -517,7 +549,7 @@ export class Game {
     const input = this.controls.sample();
     const moving = input.forward !== 0 || input.strafe !== 0;
     const bob = this.ui.settings.bob && moving && this.body.grounded ? Math.sin(this.elapsed * (input.sprint ? 13 : 9)) * 0.035 : 0;
-    this.camera.position.set(this.body.x, this.body.y + PLAYER.eye - (input.crouch ? 0.22 : 0) + bob, this.body.z);
+    this.camera.position.set(this.body.x, this.body.y + PLAYER.eye - (input.crouch ? 0.22 : 0) + bob, this.body.z).add(this.correction);
     this.camera.rotation.set(this.controls.pitch, this.controls.yaw, 0, 'YXZ');
     const fov = this.ui.settings.fov + (input.sprint && moving ? 8 : 0);
     this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, fov, Math.min(1, dt * 10));
@@ -575,14 +607,11 @@ export class Game {
     const raw = Math.max(0.001, (now - this.previous) / 1000), dt = Math.min(0.05, raw);
     this.previous = now; this.elapsed += dt; this.fps += (1 / raw - this.fps) * 0.05;
     if (this.player && this.body) {
-      const input = this.controls.sample();
-      if (this.player.hp > 0 && this.world.chunks.has(chunkKey(chunkCoord(this.body.x), chunkCoord(this.body.z)))) {
-        const blend = Math.min(1, dt * 8);
-        this.body.x += this.correction.x * blend; this.body.y += this.correction.y * blend; this.body.z += this.correction.z * blend;
-        this.correction.multiplyScalar(1 - blend);
-        stepBody(this.body, input, dt, { getBlock: this.getBlock, mode: this.player.mode === 'adventure' ? 'survival' : this.player.mode });
-      }
       this.sendInput();
+      this.correction.multiplyScalar(Math.exp(-8 * dt));
+      if (this.player.hp > 0 && this.world.chunks.has(chunkKey(chunkCoord(this.body.x), chunkCoord(this.body.z)))) {
+        this.prediction.advance(this.body, dt, { getBlock: this.getBlock, mode: this.player.mode === 'adventure' ? 'survival' : this.player.mode });
+      }
       this.updateCamera(dt);
       if (now - this.requestAt >= 100) { this.requestAt = now; this.requestChunks(now); }
       for (const actor of this.actors.values()) {
@@ -643,7 +672,7 @@ export class Game {
   private clearWorld(): void {
     this.world.clear();
     for (const id of this.actors.keys()) this.removeActor(id);
-    this.actorMeshes = []; this.pendingChunks.clear(); this.history = [];
+    this.actorMeshes = []; this.pendingChunks.clear(); this.prediction = new Prediction();
     this.correction.set(0, 0, 0); this.puffs.clear(); this.mine = undefined; this.outline.visible = false;
     this.portalTime = 0;
   }

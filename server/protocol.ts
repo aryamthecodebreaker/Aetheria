@@ -23,7 +23,7 @@ function action(v: unknown): v is Action {
     case 'trade': return int(v.offer, 0, 20) && str(v.npc, 1, 80);
     case 'enhance': case 'repair': return int(v.slot, 0, 35);
     case 'eat': case 'respawn': case 'drop': case 'sleep': case 'closeContainer': return true;
-    case 'chat': return str(v.text, 1, 256) && !/[\x00-\x08\x0b-\x1f]/.test(v.text);
+    case 'chat': return str(v.text, 1, 256) && [...v.text].every(c => c.charCodeAt(0) >= 32 || c === '\t' || c === '\n');
     default: return false;
   }
 }
